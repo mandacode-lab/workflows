@@ -25,8 +25,8 @@ jobs:
 
       - name: Setup actionlint
         run: |
-          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          echo "$PWD" >> $GITHUB_PATH
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Run actionlint
         run: |
