@@ -3,21 +3,6 @@ name: Go Project Release
 on:
   workflow_call:
     inputs:
-      dockerfile-path:
-        description: "Path to Dockerfiles directory"
-        required: false
-        type: string
-        default: "build"
-      dockerfile-pattern:
-        description: "Dockerfile pattern"
-        required: false
-        type: string
-        default: "Dockerfile.*"
-      build-context:
-        description: "Docker build context path"
-        required: false
-        type: string
-        default: "."
       registry:
         description: "Docker registry"
         required: false
@@ -27,26 +12,61 @@ on:
         description: "Image name prefix (e.g., owner/repo)"
         required: true
         type: string
+      dockerfile-path:
+        description: "Path to Dockerfiles directory"
+        required: false
+        type: string
+        default: "build"
+      dockerfile-pattern:
+        description: "Dockerfile pattern to match"
+        required: false
+        type: string
+        default: "Dockerfile.*"
+      dockerfile-exclude-pattern:
+        description: "Dockerfile pattern to exclude"
+        required: false
+        type: string
+        default: "Dockerfile.migration"
+      build-context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
       platforms:
         description: "Target platforms"
         required: false
         type: string
         default: "linux/amd64,linux/arm64"
+      enable-migration-release:
+        description: "Enable migration release"
+        required: false
+        type: boolean
+        default: false
+      migration-docker-image:
+        description: "Path to migration Dockerfile"
+        required: false
+        type: string
+        default: "Dockerfile.migration"
+      migration-dir:
+        description: "Path to migration directory"
+        required: false
+        type: string
+        default: "migrations"
       enable-helm-release:
         description: "Enable Helm chart release"
         required: false
         type: boolean
         default: false
-      helm-chart-path:
-        description: "Path to Helm charts directory"
-        required: false
-        type: string
-        default: "helm"
-      helm-registry-path:
-        description: "Helm chart registry path"
+      helm-chart-name:
+        description: "Helm chart name (e.g., owner/charts/app)"
         required: false
         type: string
         default: ""
+      helm-chart-dir:
+        description: "Path to Helm chart directory"
+        required: false
+        type: string
+        default: "helm"
     secrets:
       registry-username:
         description: "Registry username"
@@ -63,31 +83,75 @@ permissions:
   attestations: write
 
 jobs:
+  find-dockerfiles:
+    name: Find Dockerfiles
+    runs-on: ubuntu-latest
+    outputs:
+      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Find Dockerfiles
+        id: find
+        run: |
+          # Find all Dockerfiles matching pattern, excluding specified pattern
+          DOCKERFILES=$(find ${{ inputs.dockerfile-path }} -type f -name '${{ inputs.dockerfile-pattern }}' ! -name '${{ inputs.dockerfile-exclude-pattern }}' | jq -R -s -c 'split("\n")[:-1]')
+          echo "dockerfiles=$DOCKERFILES" >> $GITHUB_OUTPUT
+          echo "Found Dockerfiles:"
+          echo "  Pattern: ${{ inputs.dockerfile-pattern }}"
+          echo "  Exclude: ${{ inputs.dockerfile-exclude-pattern }}"
+          echo "$DOCKERFILES" | jq -r '.[]'
+
   docker-release:
     name: Docker Release
-    uses: ./.github/workflows/dockerfile_build_and_push.yml
-    with:
-      dockerfile-path: ${{ inputs.dockerfile-path }}
-      dockerfile-pattern: "Dockerfile.*"
-      build-context: ${{ inputs.build-context }}
-      registry: ${{ inputs.registry }}
-      image-prefix: ${{ inputs.image-prefix }}
-      tag-strategy: "tag"
-      additional-tags: "latest"
-      platforms: ${{ inputs.platforms }}
-      enable-provenance: true
-      enable-sbom: true
-    secrets:
-      registry-username: ${{ secrets.registry-username }}
-      registry-password: ${{ secrets.registry-password }}
+    runs-on: ubuntu-latest
+    needs: find-dockerfiles
+    if: needs.find-dockerfiles.outputs.dockerfiles != '[]'
+    strategy:
+      matrix:
+        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Extract image name
+        id: extract
+        run: |
+          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
+          BINARY=${DOCKERFILE_NAME#Dockerfile.}
+          IMAGE_NAME="${{ inputs.image-prefix }}/${BINARY}"
+
+          echo "binary=$BINARY" >> $GITHUB_OUTPUT
+          echo "image-name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Image: $IMAGE_NAME"
+
+      - name: Build and push
+        uses: ./.github/workflows/dockerfile_build_and_push.yml
+        with:
+          image-name: ${{ steps.extract.outputs.image-name }}
+          dockerfile-path: ${{ matrix.dockerfile }}
+          build-context: ${{ inputs.build-context }}
+          registry: ${{ inputs.registry }}
+          tag-strategy: "tag"
+          additional-tags: "latest"
+          platforms: ${{ inputs.platforms }}
+          enable-provenance: true
+          enable-sbom: true
+        secrets:
+          registry-username: ${{ secrets.registry-username }}
+          registry-password: ${{ secrets.registry-password }}
 
   migration-release:
     name: Migration Release
+    if: inputs.enable-migration-release
     uses: ./.github/workflows/migration_build_and_push.yml
     with:
-      dockerfile-path: ${{ inputs.dockerfile-path }}
+      image-name: ${{ inputs.image-prefix }}/migration
+      migration-dir: ${{ inputs.migration-dir }}
+      dockerfile-path: ${{ inputs.migration-docker-image }}
       registry: ${{ inputs.registry }}
-      image-prefix: ${{ inputs.image-prefix }}
     secrets:
       registry-username: ${{ secrets.registry-username }}
       registry-password: ${{ secrets.registry-password }}
@@ -98,10 +162,9 @@ jobs:
     needs: docker-release
     uses: ./.github/workflows/helm_chart_build_and_push.yml
     with:
-      chart-path: ${{ inputs.helm-chart-path }}
-      helm-version: "v3.16.3"
+      chart-name: ${{ inputs.helm-chart-name }}
+      chart-dir: ${{ inputs.helm-chart-dir }}
       registry: ${{ inputs.registry }}
-      registry-path: ${{ inputs.helm-registry-path != '' && inputs.helm-registry-path || format('{0}/charts', inputs.image-prefix) }}
       version-strategy: "tag"
       app-version-strategy: "tag"
       enable-signing: false

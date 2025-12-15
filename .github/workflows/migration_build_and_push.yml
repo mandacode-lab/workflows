@@ -3,20 +3,23 @@ name: Migration Build and Push
 on:
   workflow_call:
     inputs:
-      dockerfile-path:
-        description: 'Path to Dockerfiles directory'
-        required: false
+      image-name:
+        description: 'Full migration image name (e.g., ghcr.io/owner/app-migration)'
+        required: true
         type: string
-        default: 'build'
+      migration-dir:
+        description: 'Path to migration directory containing VERSION file'
+        required: true
+        type: string
+      dockerfile-path:
+        description: 'Path to migration Dockerfile'
+        required: true
+        type: string
       registry:
         description: 'Docker registry'
         required: false
         type: string
         default: 'ghcr.io'
-      image-prefix:
-        description: 'Image name prefix'
-        required: true
-        type: string
     secrets:
       registry-username:
         description: 'Registry username'
@@ -31,34 +34,9 @@ permissions:
   packages: write
 
 jobs:
-  find-migrations:
-    name: Find Migration Dockerfiles
-    runs-on: ubuntu-latest
-    outputs:
-      migrations: ${{ steps.find.outputs.migrations }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Find migration Dockerfiles
-        id: find
-        run: |
-          MIGRATIONS=$(find ${{ inputs.dockerfile-path }} -type f -name 'Dockerfile.migration' | jq -R -s -c 'split("\n")[:-1]')
-          echo "migrations=$MIGRATIONS" >> $GITHUB_OUTPUT
-          echo "Found migration Dockerfiles:"
-          echo "$MIGRATIONS" | jq -r '.[]'
-
   build-and-push:
     name: Build and Push Migration
     runs-on: ubuntu-latest
-    needs: find-migrations
-    if: needs.find-migrations.outputs.migrations != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-migrations.outputs.migrations) }}
-      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -68,26 +46,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract service name
-        id: extract
-        run: |
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "Service: $SERVICE"
-
-      - name: Get migration files path
-        id: migration-path
-        run: |
-          SERVICE="${{ steps.extract.outputs.service }}"
-          MIGRATION_DIR="services/${SERVICE}/ent/migrate/migrations"
-          echo "migration-dir=$MIGRATION_DIR" >> $GITHUB_OUTPUT
-          echo "Migration directory: $MIGRATION_DIR"
-
       - name: Read VERSION file
         id: version
         run: |
-          SERVICE="${{ steps.extract.outputs.service }}"
-          MIGRATION_DIR="${{ steps.migration-path.outputs.migration-dir }}"
+          MIGRATION_DIR="${{ inputs.migration-dir }}"
           VERSION_FILE="${MIGRATION_DIR}/VERSION"
 
           if [ -f "$VERSION_FILE" ]; then
@@ -102,9 +64,8 @@ jobs:
       - name: Determine if version changed
         id: changed
         run: |
-          SERVICE="${{ steps.extract.outputs.service }}"
           VERSION="${{ steps.version.outputs.version }}"
-          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image-prefix }}/${SERVICE}-migration"
+          IMAGE_NAME="${{ inputs.image-name }}"
 
           # Check if this version already exists
           if docker manifest inspect ${IMAGE_NAME}:${VERSION} >/dev/null 2>&1; then
@@ -119,9 +80,8 @@ jobs:
         id: tags
         if: steps.changed.outputs.changed == 'true'
         run: |
-          SERVICE="${{ steps.extract.outputs.service }}"
           VERSION="${{ steps.version.outputs.version }}"
-          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image-prefix }}/${SERVICE}-migration"
+          IMAGE_NAME="${{ inputs.image-name }}"
 
           # Primary tag: version
           TAGS="${IMAGE_NAME}:${VERSION}"
@@ -135,7 +95,6 @@ jobs:
           fi
 
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
-          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
           echo "Generated tags:"
           echo "$TAGS" | tr ',' '\n'
 
@@ -152,7 +111,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ inputs.dockerfile-path }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
@@ -161,14 +120,13 @@ jobs:
 
       - name: Summary
         run: |
-          SERVICE="${{ steps.extract.outputs.service }}"
           VERSION="${{ steps.version.outputs.version }}"
-          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image-prefix }}/${SERVICE}-migration"
+          IMAGE_NAME="${{ inputs.image-name }}"
           CHANGED="${{ steps.changed.outputs.changed }}"
 
           echo "### 🗄️ Migration Image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Service:** $SERVICE" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${IMAGE_NAME}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
 
           if [ "$CHANGED" = "true" ]; then

@@ -3,11 +3,10 @@ name: Helm Chart Test
 on:
   workflow_call:
     inputs:
-      chart-path:
-        description: 'Path to Helm charts directory'
-        required: false
+      chart-dir:
+        description: 'Path to Helm chart directory (containing Chart.yaml)'
+        required: true
         type: string
-        default: 'helm'
       helm-version:
         description: 'Helm version to use'
         required: false
@@ -39,32 +38,9 @@ permissions:
   contents: read
 
 jobs:
-  find-charts:
-    name: Find Helm Charts
-    runs-on: ubuntu-latest
-    outputs:
-      charts: ${{ steps.find.outputs.charts }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Find Helm charts
-        id: find
-        run: |
-          CHARTS=$(find ${{ inputs.chart-path }} -name 'Chart.yaml' -exec dirname {} \; | jq -R -s -c 'split("\n")[:-1]')
-          echo "charts=$CHARTS" >> $GITHUB_OUTPUT
-          echo "Found Helm charts:"
-          echo "$CHARTS" | jq -r '.[]'
-
   lint:
     name: Helm Lint
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: needs.find-charts.outputs.charts != '[]'
-    strategy:
-      matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
-      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -74,31 +50,20 @@ jobs:
         with:
           version: ${{ inputs.helm-version }}
 
-      - name: Extract chart name
-        id: extract
-        run: |
-          CHART_NAME=$(basename ${{ matrix.chart }})
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-
       - name: Helm lint
         run: |
-          echo "Linting Helm chart: ${{ steps.extract.outputs.chart-name }}"
-          helm lint ${{ matrix.chart }}
+          echo "Linting Helm chart..."
+          helm lint ${{ inputs.chart-dir }}
 
       - name: Helm template
         run: |
           echo "Templating Helm chart..."
-          helm template test ${{ matrix.chart }} --debug
+          helm template test ${{ inputs.chart-dir }} --debug
 
   kubeconform:
     name: Kubeconform Validation
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: inputs.enable-kubeconform && needs.find-charts.outputs.charts != '[]'
-    strategy:
-      matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
-      fail-fast: false
+    if: inputs.enable-kubeconform
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -114,16 +79,10 @@ jobs:
           tar xf kubeconform-linux-amd64.tar.gz
           sudo mv kubeconform /usr/local/bin/
 
-      - name: Extract chart name
-        id: extract
-        run: |
-          CHART_NAME=$(basename ${{ matrix.chart }})
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-
       - name: Validate with kubeconform
         run: |
           echo "Validating with kubeconform..."
-          helm template test ${{ matrix.chart }} | kubeconform \
+          helm template test ${{ inputs.chart-dir }} | kubeconform \
             -kubernetes-version ${{ inputs.kubernetes-version }} \
             -schema-location default \
             -strict \
@@ -132,12 +91,7 @@ jobs:
   kubeval:
     name: Kubeval Validation
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: inputs.enable-kubeval && needs.find-charts.outputs.charts != '[]'
-    strategy:
-      matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
-      fail-fast: false
+    if: inputs.enable-kubeval
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -153,28 +107,17 @@ jobs:
           tar xf kubeval-linux-amd64.tar.gz
           sudo mv kubeval /usr/local/bin/
 
-      - name: Extract chart name
-        id: extract
-        run: |
-          CHART_NAME=$(basename ${{ matrix.chart }})
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-
       - name: Validate with kubeval
         run: |
           echo "Validating with kubeval..."
-          helm template test ${{ matrix.chart }} | kubeval \
+          helm template test ${{ inputs.chart-dir }} | kubeval \
             --kubernetes-version ${{ inputs.kubernetes-version }} \
             --strict
 
   polaris:
     name: Polaris Best Practices
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: inputs.enable-polaris && needs.find-charts.outputs.charts != '[]'
-    strategy:
-      matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
-      fail-fast: false
+    if: inputs.enable-polaris
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -184,27 +127,15 @@ jobs:
         with:
           version: ${{ inputs.helm-version }}
 
-      - name: Extract chart name
-        id: extract
-        run: |
-          CHART_NAME=$(basename ${{ matrix.chart }})
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-
       - name: Run Polaris
         uses: fairwindsops/polaris-action@v0.1.0
         with:
-          helm-chart: ${{ matrix.chart }}
-          helm-values: ${{ matrix.chart }}/values.yaml
+          helm-chart: ${{ inputs.chart-dir }}
+          helm-values: ${{ inputs.chart-dir }}/values.yaml
 
   install-test:
     name: Helm Install Test
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: needs.find-charts.outputs.charts != '[]'
-    strategy:
-      matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
-      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -220,21 +151,15 @@ jobs:
           version: v0.25.0
           kubectl_version: ${{ inputs.kubernetes-version }}
 
-      - name: Extract chart name
-        id: extract
-        run: |
-          CHART_NAME=$(basename ${{ matrix.chart }})
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-
       - name: Install chart
         run: |
           echo "Installing Helm chart in Kind cluster..."
-          helm install test-${{ steps.extract.outputs.chart-name }} ${{ matrix.chart }} \
+          helm install test-release ${{ inputs.chart-dir }} \
             --wait --timeout 5m --debug \
             --dry-run
 
       - name: Chart info
         run: |
           echo "### ⎈ Helm Chart Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "**Chart:** ${{ steps.extract.outputs.chart-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart:** ${{ inputs.chart-dir }}" >> $GITHUB_STEP_SUMMARY
           echo "**Status:** ✅ Passed" >> $GITHUB_STEP_SUMMARY

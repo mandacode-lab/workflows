@@ -4,15 +4,9 @@ on:
   workflow_call:
     inputs:
       dockerfile-path:
-        description: 'Path to Dockerfiles directory'
-        required: false
+        description: 'Path to Dockerfile'
+        required: true
         type: string
-        default: 'build'
-      dockerfile-pattern:
-        description: 'Dockerfile pattern to test (e.g., Dockerfile.*)'
-        required: false
-        type: string
-        default: 'Dockerfile.*'
       build-context:
         description: 'Docker build context path'
         required: false
@@ -40,31 +34,10 @@ permissions:
   security-events: write
 
 jobs:
-  find-dockerfiles:
-    name: Find Dockerfiles
-    runs-on: ubuntu-latest
-    outputs:
-      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Find Dockerfiles
-        id: find
-        run: |
-          DOCKERFILES=$(find ${{ inputs.dockerfile-path }} -type f -name '${{ inputs.dockerfile-pattern }}' | jq -R -s -c 'split("\n")[:-1]')
-          echo "dockerfiles=$DOCKERFILES" >> $GITHUB_OUTPUT
-          echo "Found Dockerfiles:"
-          echo "$DOCKERFILES" | jq -r '.[]'
-
   hadolint:
     name: Hadolint
     runs-on: ubuntu-latest
-    needs: find-dockerfiles
-    if: inputs.enable-hadolint && needs.find-dockerfiles.outputs.dockerfiles != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
+    if: inputs.enable-hadolint
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -72,27 +45,21 @@ jobs:
       - name: Run Hadolint
         uses: hadolint/hadolint-action@v3.3.0
         with:
-          dockerfile: ${{ matrix.dockerfile }}
+          dockerfile: ${{ inputs.dockerfile-path }}
           failure-threshold: warning
           format: sarif
-          output-file: hadolint-${{ hashFiles(matrix.dockerfile) }}.sarif
+          output-file: hadolint-results.sarif
         continue-on-error: true
 
       - name: Upload Hadolint results
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: hadolint-${{ hashFiles(matrix.dockerfile) }}.sarif
+          sarif_file: hadolint-results.sarif
         continue-on-error: true
 
   build-test:
     name: Build Test
     runs-on: ubuntu-latest
-    needs: find-dockerfiles
-    if: needs.find-dockerfiles.outputs.dockerfiles != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
-      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -100,25 +67,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract service and binary name
-        id: extract
-        run: |
-          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          BINARY=${DOCKERFILE_NAME#Dockerfile.}
-
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-          echo "Building: $SERVICE/$BINARY"
-
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build-context }}
-          file: ${{ matrix.dockerfile }}
+          file: ${{ inputs.dockerfile-path }}
           push: false
           load: true
-          tags: test/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:test
+          tags: test:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -126,18 +82,14 @@ jobs:
         if: ${{ !inputs.test-build-only }}
         run: |
           echo "Testing Docker image..."
-          docker run --rm test/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:test --version || true
+          docker run --rm test:latest --version || true
           echo "✅ Image test completed"
 
   trivy-scan:
     name: Trivy Security Scan
     runs-on: ubuntu-latest
-    needs: [find-dockerfiles, build-test]
-    if: inputs.enable-trivy && needs.find-dockerfiles.outputs.dockerfiles != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
-      fail-fast: false
+    needs: build-test
+    if: inputs.enable-trivy
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -145,36 +97,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract service and binary name
-        id: extract
-        run: |
-          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          BINARY=${DOCKERFILE_NAME#Dockerfile.}
-
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-
       - name: Build Docker image for scanning
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build-context }}
-          file: ${{ matrix.dockerfile }}
+          file: ${{ inputs.dockerfile-path }}
           push: false
           load: true
-          tags: scan/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:scan
+          tags: scan:latest
           cache-from: type=gha
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: scan/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:scan
+          image-ref: scan:latest
           format: 'sarif'
-          output: 'trivy-${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}.sarif'
+          output: 'trivy-results.sarif'
         continue-on-error: true
 
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}.sarif
+          sarif_file: trivy-results.sarif
         continue-on-error: true
