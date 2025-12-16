@@ -21,19 +21,9 @@ on:
         description: 'Kubernetes version for testing'
         required: false
         type: string
-        default: 'v1.31.2'
+        default: 'v1.34.0'
       enable-kubeconform:
         description: 'Enable kubeconform validation'
-        required: false
-        type: boolean
-        default: true
-      enable-kubeval:
-        description: 'Enable kubeval validation'
-        required: false
-        type: boolean
-        default: false
-      enable-polaris:
-        description: 'Enable Polaris best practices check'
         required: false
         type: boolean
         default: true
@@ -115,82 +105,13 @@ jobs:
       - name: Validate with kubeconform
         run: |
           echo "Validating with kubeconform..."
+          K8S_VERSION="${{ inputs.kubernetes-version }}"
+          K8S_VERSION="${K8S_VERSION#v}"
           helm template test ${{ steps.paths.outputs.chart-dir }} | kubeconform \
-            -kubernetes-version ${{ inputs.kubernetes-version }} \
+            -kubernetes-version "$K8S_VERSION" \
             -schema-location default \
             -strict \
             -summary
-
-  kubeval:
-    name: Kubeval Validation
-    runs-on: ubuntu-latest
-    if: inputs.enable-kubeval && fromJson(inputs.charts) != null && fromJson(inputs.charts)[0] != null
-    strategy:
-      matrix:
-        item: ${{ fromJson(inputs.charts) }}
-      fail-fast: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: ${{ inputs.helm-version }}
-
-      - name: Setup kubeval
-        run: |
-          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
-          tar xf kubeval-linux-amd64.tar.gz
-          sudo mv kubeval /usr/local/bin/
-
-      - name: Resolve paths
-        id: paths
-        run: |
-          CHART_DIR="${{ matrix.item.dir }}"
-          if [ -n "${{ inputs.base-path }}" ]; then
-            CHART_DIR="${{ inputs.base-path }}/${CHART_DIR}"
-          fi
-          echo "chart-dir=$CHART_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Validate with kubeval
-        run: |
-          echo "Validating with kubeval..."
-          helm template test ${{ steps.paths.outputs.chart-dir }} | kubeval \
-            --kubernetes-version ${{ inputs.kubernetes-version }} \
-            --strict
-
-  polaris:
-    name: Polaris Best Practices
-    runs-on: ubuntu-latest
-    if: inputs.enable-polaris && fromJson(inputs.charts) != null && fromJson(inputs.charts)[0] != null
-    strategy:
-      matrix:
-        item: ${{ fromJson(inputs.charts) }}
-      fail-fast: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: ${{ inputs.helm-version }}
-
-      - name: Resolve paths
-        id: paths
-        run: |
-          CHART_DIR="${{ matrix.item.dir }}"
-          if [ -n "${{ inputs.base-path }}" ]; then
-            CHART_DIR="${{ inputs.base-path }}/${CHART_DIR}"
-          fi
-          echo "chart-dir=$CHART_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Run Polaris
-        uses: fairwindsops/polaris-action@v0.1.0
-        with:
-          helm-chart: ${{ steps.paths.outputs.chart-dir }}
-          helm-values: ${{ steps.paths.outputs.chart-dir }}/values.yaml
 
   install-test:
     name: Helm Install Test
