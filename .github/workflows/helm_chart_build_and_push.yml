@@ -3,45 +3,25 @@ name: Helm Chart Build and Push
 on:
   workflow_call:
     inputs:
-      chart-path:
-        description: 'Path to Helm charts directory'
+      charts:
+        description: 'JSON array of chart configurations [{dir}]'
+        required: true
+        type: string
+      base-path:
+        description: 'Base path for Helm charts (prepended to chart dirs)'
         required: false
         type: string
-        default: 'helm'
-      helm-version:
-        description: 'Helm version to use'
-        required: false
-        type: string
-        default: 'v3.16.3'
+        default: ''
       registry:
         description: 'OCI registry for Helm charts (e.g., ghcr.io, registry-1.docker.io)'
         required: false
         type: string
         default: 'ghcr.io'
-      registry-path:
-        description: 'Registry path prefix (e.g., owner/charts)'
-        required: true
-        type: string
-      version-strategy:
-        description: 'Version strategy: tag (use git tag), chart (use Chart.yaml version), auto (auto-increment)'
+      helm-version:
+        description: 'Helm version to use'
         required: false
         type: string
-        default: 'chart'
-      version-override:
-        description: 'Override version (leave empty to use strategy)'
-        required: false
-        type: string
-        default: ''
-      app-version-strategy:
-        description: 'App version strategy: tag (use git tag), sha (use commit sha), custom'
-        required: false
-        type: string
-        default: 'tag'
-      app-version-override:
-        description: 'Override app version (leave empty to use strategy)'
-        required: false
-        type: string
-        default: ''
+        default: 'v3.16.3'
       enable-signing:
         description: 'Enable chart signing with GPG'
         required: false
@@ -57,6 +37,9 @@ on:
       gpg-private-key:
         description: 'GPG private key for signing (base64 encoded)'
         required: false
+      gpg-key-name:
+        description: 'GPG key name for signing'
+        required: false
       gpg-passphrase:
         description: 'GPG key passphrase'
         required: false
@@ -67,31 +50,13 @@ permissions:
   packages: write
 
 jobs:
-  find-charts:
-    name: Find Helm Charts
-    runs-on: ubuntu-latest
-    outputs:
-      charts: ${{ steps.find.outputs.charts }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Find Helm charts
-        id: find
-        run: |
-          CHARTS=$(find ${{ inputs.chart-path }} -name 'Chart.yaml' -exec dirname {} \; | jq -R -s -c 'split("\n")[:-1]')
-          echo "charts=$CHARTS" >> $GITHUB_OUTPUT
-          echo "Found Helm charts:"
-          echo "$CHARTS" | jq -r '.[]'
-
   package-and-push:
     name: Package and Push
     runs-on: ubuntu-latest
-    needs: find-charts
-    if: needs.find-charts.outputs.charts != '[]'
+    if: fromJson(inputs.charts) != null && fromJson(inputs.charts)[0] != null
     strategy:
       matrix:
-        chart: ${{ fromJson(needs.find-charts.outputs.charts) }}
+        chart: ${{ fromJson(inputs.charts) }}
       fail-fast: false
     steps:
       - name: Checkout code
@@ -104,80 +69,34 @@ jobs:
         with:
           version: ${{ inputs.helm-version }}
 
+      - name: Resolve paths
+        id: paths
+        run: |
+          CHART_DIR="${{ matrix.chart.dir }}"
+          if [ -n "${{ inputs.base-path }}" ]; then
+            CHART_DIR="${{ inputs.base-path }}/${CHART_DIR}"
+          fi
+          echo "chart-dir=$CHART_DIR" >> "$GITHUB_OUTPUT"
+          echo "Chart directory: $CHART_DIR"
+
       - name: Extract chart info
         id: extract
         run: |
-          CHART_NAME=$(yq eval '.name' ${{ matrix.chart }}/Chart.yaml)
-          CHART_VERSION=$(yq eval '.version' ${{ matrix.chart }}/Chart.yaml)
-          CHART_APP_VERSION=$(yq eval '.appVersion' ${{ matrix.chart }}/Chart.yaml)
+          CHART_NAME=$(yq eval '.name' "${{ steps.paths.outputs.chart-dir }}/Chart.yaml")
+          CHART_VERSION=$(yq eval '.version' "${{ steps.paths.outputs.chart-dir }}/Chart.yaml")
+          CHART_APP_VERSION=$(yq eval '.appVersion' "${{ steps.paths.outputs.chart-dir }}/Chart.yaml")
 
-          echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
-          echo "chart-version=$CHART_VERSION" >> $GITHUB_OUTPUT
-          echo "app-version=$CHART_APP_VERSION" >> $GITHUB_OUTPUT
+          {
+            echo "chart-name=$CHART_NAME"
+            echo "chart-version=$CHART_VERSION"
+            echo "app-version=$CHART_APP_VERSION"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Determine version
-        id: version
+      - name: Prepare chart
         run: |
-          # Determine chart version
-          if [ -n "${{ inputs.version-override }}" ]; then
-            VERSION="${{ inputs.version-override }}"
-          else
-            case "${{ inputs.version-strategy }}" in
-              tag)
-                if [ "${{ github.ref_type }}" = "tag" ]; then
-                  VERSION="${{ github.ref_name }}"
-                  VERSION="${VERSION#v}"  # Remove 'v' prefix if exists
-                else
-                  echo "Error: tag strategy requires a git tag"
-                  exit 1
-                fi
-                ;;
-              chart)
-                VERSION="${{ steps.extract.outputs.chart-version }}"
-                ;;
-              auto)
-                VERSION="${{ steps.extract.outputs.chart-version }}"
-                # Auto-increment patch version
-                IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-                PATCH=$((PATCH + 1))
-                VERSION="${MAJOR}.${MINOR}.${PATCH}"
-                ;;
-            esac
-          fi
-
-          # Determine app version
-          if [ -n "${{ inputs.app-version-override }}" ]; then
-            APP_VERSION="${{ inputs.app-version-override }}"
-          else
-            case "${{ inputs.app-version-strategy }}" in
-              tag)
-                if [ "${{ github.ref_type }}" = "tag" ]; then
-                  APP_VERSION="${{ github.ref_name }}"
-                else
-                  APP_VERSION="dev-$(echo ${{ github.sha }} | cut -c1-7)"
-                fi
-                ;;
-              sha)
-                APP_VERSION="sha-$(echo ${{ github.sha }} | cut -c1-7)"
-                ;;
-              custom)
-                APP_VERSION="${{ steps.extract.outputs.app-version }}"
-                ;;
-            esac
-          fi
-
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "app-version=$APP_VERSION" >> $GITHUB_OUTPUT
-          echo "Chart version: $VERSION"
-          echo "App version: $APP_VERSION"
-
-      - name: Update Chart.yaml versions
-        run: |
-          yq eval -i '.version = "${{ steps.version.outputs.version }}"' ${{ matrix.chart }}/Chart.yaml
-          yq eval -i '.appVersion = "${{ steps.version.outputs.app-version }}"' ${{ matrix.chart }}/Chart.yaml
-
-          echo "Updated Chart.yaml:"
-          cat ${{ matrix.chart }}/Chart.yaml
+          echo "Chart version: ${{ steps.extract.outputs.chart-version }}"
+          echo "Chart appVersion: ${{ steps.extract.outputs.app-version }}"
+          echo "Packaging chart with existing versions..."
 
       - name: Setup GPG
         if: inputs.enable-signing
@@ -190,14 +109,14 @@ jobs:
           mkdir -p .helm-packages
 
           if [ "${{ inputs.enable-signing }}" = "true" ]; then
-            helm package ${{ matrix.chart }} \
+            helm package ${{ steps.paths.outputs.chart-dir }} \
               --destination .helm-packages \
               --sign \
               --key "${{ secrets.gpg-key-name }}" \
               --keyring ~/.gnupg/pubring.gpg \
               --passphrase-file <(echo "${{ secrets.gpg-passphrase }}")
           else
-            helm package ${{ matrix.chart }} --destination .helm-packages
+            helm package ${{ steps.paths.outputs.chart-dir }} --destination .helm-packages
           fi
 
           ls -la .helm-packages/
@@ -210,28 +129,12 @@ jobs:
 
       - name: Push chart to OCI registry
         run: |
-          CHART_PACKAGE=$(ls .helm-packages/${{ steps.extract.outputs.chart-name }}-${{ steps.version.outputs.version }}.tgz)
-
-          helm push "$CHART_PACKAGE" \
-            oci://${{ inputs.registry }}/${{ inputs.registry-path }}
+          CHART_PACKAGE=$(ls .helm-packages/${{ steps.extract.outputs.chart-name }}-${{ steps.extract.outputs.chart-version }}.tgz)
+          helm push "$CHART_PACKAGE" oci://${{ inputs.registry }}
 
           echo "✅ Chart pushed successfully"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: .helm-packages/${{ steps.extract.outputs.chart-name }}-${{ steps.version.outputs.version }}.tgz
-
-      - name: Summary
-        run: |
-          echo "### ⎈ Helm Chart Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Chart:** ${{ steps.extract.outputs.chart-name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**App Version:** ${{ steps.version.outputs.app-version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** \`oci://${{ inputs.registry }}/${{ inputs.registry-path }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Install command:**" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "helm install my-release oci://${{ inputs.registry }}/${{ inputs.registry-path }}/${{ steps.extract.outputs.chart-name }} --version ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          subject-path: .helm-packages/${{ steps.extract.outputs.chart-name }}-${{ steps.extract.outputs.chart-version }}.tgz

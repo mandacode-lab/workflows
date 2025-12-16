@@ -52,27 +52,37 @@ on:
         description: "Enable Dockerfile testing"
         required: false
         type: boolean
-        default: true
-      dockerfile-path:
-        description: "Path to Dockerfiles directory"
+        default: false
+      images:
+        description: 'JSON array of Dockerfile paths [{dockerfile"}]'
         required: false
         type: string
-        default: "build"
-      dockerfile-pattern:
-        description: "Dockerfile pattern"
+        default: "[]"
+      image-base-path:
+        description: "Base path for Dockerfiles"
         required: false
         type: string
-        default: "Dockerfile.*"
+        default: ""
+      build-context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
       enable-helm-test:
         description: "Enable Helm chart testing"
         required: false
         type: boolean
         default: false
-      helm-chart-path:
-        description: "Path to Helm charts directory"
+      helm-charts:
+        description: "JSON array of Helm chart directories [{dir}]"
         required: false
         type: string
-        default: "helm"
+        default: "[]"
+      helm-base-path:
+        description: "Base path for Helm charts"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -98,15 +108,17 @@ jobs:
 
   dockerfile-test:
     name: Dockerfile Test
-    if: inputs.enable-dockerfile-test
+    if: inputs.enable-dockerfile-test && fromJson(inputs.images) != null && fromJson(inputs.images)[0] != null
     uses: ./.github/workflows/dockerfile_test.yml
     with:
-      dockerfile-path: ${{ inputs.dockerfile-path }}
-      dockerfile-pattern: ${{ inputs.dockerfile-pattern }}
+      images: ${{ inputs.images }}
+      base-path: ${{ inputs.image-base-path }}
+      build-context: ${{ inputs.build-context }}
 
   helm-test:
     name: Helm Chart Test
-    if: inputs.enable-helm-test
+    if: inputs.enable-helm-test && fromJson(inputs.helm-charts) != null && fromJson(inputs.helm-charts)[0] != null
     uses: ./.github/workflows/helm_chart_test.yml
     with:
-      chart-path: ${{ inputs.helm-chart-path }}
+      charts: ${{ inputs.helm-charts }}
+      base-path: ${{ inputs.helm-base-path }}

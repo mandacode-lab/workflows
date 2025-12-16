@@ -3,50 +3,56 @@ name: Go Project Release
 on:
   workflow_call:
     inputs:
-      dockerfile-path:
-        description: "Path to Dockerfiles directory"
-        required: false
-        type: string
-        default: "build"
-      dockerfile-pattern:
-        description: "Dockerfile pattern"
-        required: false
-        type: string
-        default: "Dockerfile.*"
-      build-context:
-        description: "Docker build context path"
-        required: false
-        type: string
-        default: "."
       registry:
         description: "Docker registry"
         required: false
         type: string
         default: "ghcr.io"
-      image-prefix:
-        description: "Image name prefix (e.g., owner/repo)"
-        required: true
-        type: string
-      platforms:
-        description: "Target platforms"
+      tag-prefix:
+        description: "Tag prefix (e.g., v for v1.0.0)"
         required: false
         type: string
-        default: "linux/amd64,linux/arm64"
-      enable-helm-release:
-        description: "Enable Helm chart release"
-        required: false
-        type: boolean
-        default: false
-      helm-chart-path:
-        description: "Path to Helm charts directory"
+        default: "v"
+      migration-tag-prefix:
+        description: "Migration tag prefix (e.g., mig for mig1.0.0)"
         required: false
         type: string
-        default: "helm"
-      helm-registry-path:
-        description: "Helm chart registry path"
+        default: "mig"
+      images:
+        description: "JSON array of image configurations [{name, dockerfile}]"
+        required: false
+        type: string
+        default: '[{"name": "${{ github.event.repository.name }}", "dockerfile": "Dockerfile"}]'
+      migration-images:
+        description: "JSON array of migration image configurations [{name, dockerfile}]"
+        required: false
+        type: string
+        default: "[]"
+      image-base-path:
+        description: "Base path for Dockerfiles (prepended to dockerfile paths)"
         required: false
         type: string
         default: ""
+      build-context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
+      platforms:
+        description: "Target platforms (comma-separated)"
+        required: false
+        type: string
+        default: "linux/amd64,linux/arm64"
+      enable-provenance:
+        description: "Enable build provenance attestation"
+        required: false
+        type: boolean
+        default: true
+      enable-sbom:
+        description: "Enable SBOM attestation"
+        required: false
+        type: boolean
+        default: true
     secrets:
       registry-username:
         description: "Registry username"
@@ -57,54 +63,79 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
   packages: write
   id-token: write
   attestations: write
 
 jobs:
-  docker-release:
-    name: Docker Release
+  prepare-release:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.tag.outputs.release-tag }}
+      is-migration: ${{ steps.tag.outputs.is-migration }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "Not a tag ref, skipping tag determination."
+            exit 0
+          fi
+          TAG_NAME="${{ github.ref_name }}"
+          PREFIX="${{ inputs.tag-prefix }}"
+          MIG_PREFIX="${{ inputs.migration-tag-prefix }}"
+          if [[ "$TAG_NAME" == "$MIG_PREFIX"* ]]; then
+            RELEASE_TAG="${TAG_NAME#"$MIG_PREFIX"}"
+            IS_MIGRATION="true"
+          elif [[ "$TAG_NAME" == "$PREFIX"* ]]; then
+            RELEASE_TAG="${TAG_NAME#"$PREFIX"}"
+            IS_MIGRATION="false"
+          else
+            echo "Tag does not match expected prefixes."
+            exit 1
+          fi
+
+          echo "release-tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "is-migration=$IS_MIGRATION" >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    name: Build and Push Docker Image
     uses: ./.github/workflows/dockerfile_build_and_push.yml
     with:
-      dockerfile-path: ${{ inputs.dockerfile-path }}
-      dockerfile-pattern: "Dockerfile.*"
+      images: ${{ inputs.images }}
+      base-path: ${{ inputs.image-base-path }}
       build-context: ${{ inputs.build-context }}
       registry: ${{ inputs.registry }}
-      image-prefix: ${{ inputs.image-prefix }}
-      tag-strategy: "tag"
-      additional-tags: "latest"
+      tag: ${{ github.ref_name }}
+      tag-prefix: ${{ inputs.tag-prefix }}
       platforms: ${{ inputs.platforms }}
-      enable-provenance: true
-      enable-sbom: true
+      enable-provenance: ${{ inputs.enable-provenance }}
+      enable-sbom: ${{ inputs.enable-sbom }}
     secrets:
       registry-username: ${{ secrets.registry-username }}
       registry-password: ${{ secrets.registry-password }}
 
-  migration-release:
-    name: Migration Release
-    uses: ./.github/workflows/migration_build_and_push.yml
+  build-and-push-migration:
+    name: Build and Push Migration Docker Image
+    if: startsWith(github.ref_name, inputs.migration-tag-prefix)
+    uses: ./.github/workflows/dockerfile_build_and_push.yml
     with:
-      dockerfile-path: ${{ inputs.dockerfile-path }}
+      images: ${{ inputs.migration-images }}
+      base-path: ${{ inputs.image-base-path }}
+      build-context: ${{ inputs.build-context }}
       registry: ${{ inputs.registry }}
-      image-prefix: ${{ inputs.image-prefix }}
-    secrets:
-      registry-username: ${{ secrets.registry-username }}
-      registry-password: ${{ secrets.registry-password }}
-
-  helm-release:
-    name: Helm Release
-    if: inputs.enable-helm-release
-    needs: docker-release
-    uses: ./.github/workflows/helm_chart_build_and_push.yml
-    with:
-      chart-path: ${{ inputs.helm-chart-path }}
-      helm-version: "v3.16.3"
-      registry: ${{ inputs.registry }}
-      registry-path: ${{ inputs.helm-registry-path != '' && inputs.helm-registry-path || format('{0}/charts', inputs.image-prefix) }}
-      version-strategy: "tag"
-      app-version-strategy: "tag"
-      enable-signing: false
+      tag: ${{ github.ref_name }}
+      tag-prefix: ${{ inputs.migration-tag-prefix }}
+      platforms: ${{ inputs.platforms }}
+      enable-provenance: ${{ inputs.enable-provenance }}
+      enable-sbom: ${{ inputs.enable-sbom }}
     secrets:
       registry-username: ${{ secrets.registry-username }}
       registry-password: ${{ secrets.registry-password }}

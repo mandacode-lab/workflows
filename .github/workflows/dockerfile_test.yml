@@ -3,33 +3,32 @@ name: Dockerfile Test
 on:
   workflow_call:
     inputs:
-      dockerfile-path:
-        description: 'Path to Dockerfiles directory'
+      images:
+        description: "JSON array of image configurations [{dockerfile}]"
+        required: true
+        type: string
+      base-path:
+        description: "Base path for images (prepended to dockerfile paths)"
         required: false
         type: string
-        default: 'build'
-      dockerfile-pattern:
-        description: 'Dockerfile pattern to test (e.g., Dockerfile.*)'
-        required: false
-        type: string
-        default: 'Dockerfile.*'
+        default: ""
       build-context:
-        description: 'Docker build context path'
+        description: "Docker build context path"
         required: false
         type: string
-        default: '.'
+        default: "."
       test-build-only:
-        description: 'Only test if Dockerfile builds (skip running)'
+        description: "Only test if Dockerfile builds (skip running)"
         required: false
         type: boolean
         default: true
       enable-hadolint:
-        description: 'Enable Hadolint linting'
+        description: "Enable Hadolint linting"
         required: false
         type: boolean
         default: true
       enable-trivy:
-        description: 'Enable Trivy security scan'
+        description: "Enable Trivy security scan"
         required: false
         type: boolean
         default: true
@@ -40,85 +39,56 @@ permissions:
   security-events: write
 
 jobs:
-  find-dockerfiles:
-    name: Find Dockerfiles
+  test:
+    name: Test Dockerfile
     runs-on: ubuntu-latest
-    outputs:
-      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Find Dockerfiles
-        id: find
-        run: |
-          DOCKERFILES=$(find ${{ inputs.dockerfile-path }} -type f -name '${{ inputs.dockerfile-pattern }}' | jq -R -s -c 'split("\n")[:-1]')
-          echo "dockerfiles=$DOCKERFILES" >> $GITHUB_OUTPUT
-          echo "Found Dockerfiles:"
-          echo "$DOCKERFILES" | jq -r '.[]'
-
-  hadolint:
-    name: Hadolint
-    runs-on: ubuntu-latest
-    needs: find-dockerfiles
-    if: inputs.enable-hadolint && needs.find-dockerfiles.outputs.dockerfiles != '[]'
+    if: fromJson(inputs.images) != null && fromJson(inputs.images)[0] != null
     strategy:
       matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Run Hadolint
-        uses: hadolint/hadolint-action@v3.3.0
-        with:
-          dockerfile: ${{ matrix.dockerfile }}
-          failure-threshold: warning
-          format: sarif
-          output-file: hadolint-${{ hashFiles(matrix.dockerfile) }}.sarif
-        continue-on-error: true
-
-      - name: Upload Hadolint results
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: hadolint-${{ hashFiles(matrix.dockerfile) }}.sarif
-        continue-on-error: true
-
-  build-test:
-    name: Build Test
-    runs-on: ubuntu-latest
-    needs: find-dockerfiles
-    if: needs.find-dockerfiles.outputs.dockerfiles != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
+        image: ${{ fromJson(inputs.images) }}
       fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Resolve paths
+        id: paths
+        run: |
+          DOCKERFILE="${{ matrix.image.dockerfile }}"
+          if [ -n "${{ inputs.base-path }}" ]; then
+            DOCKERFILE="${{ inputs.base-path }}/${DOCKERFILE}"
+          fi
+          echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
+          echo "Dockerfile path: $DOCKERFILE"
+
+      - name: Run Hadolint
+        if: inputs.enable-hadolint
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: ${{ steps.paths.outputs.dockerfile }}
+          failure-threshold: warning
+          format: sarif
+          output-file: hadolint-results.sarif
+        continue-on-error: true
+
+      - name: Upload Hadolint results
+        if: inputs.enable-hadolint
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: hadolint-results.sarif
+        continue-on-error: true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Extract service and binary name
-        id: extract
-        run: |
-          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          BINARY=${DOCKERFILE_NAME#Dockerfile.}
-
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-          echo "Building: $SERVICE/$BINARY"
 
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build-context }}
-          file: ${{ matrix.dockerfile }}
+          file: ${{ steps.paths.outputs.dockerfile }}
           push: false
           load: true
-          tags: test/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:test
+          tags: test:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -126,55 +96,21 @@ jobs:
         if: ${{ !inputs.test-build-only }}
         run: |
           echo "Testing Docker image..."
-          docker run --rm test/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:test --version || true
+          docker run --rm test:latest --version || true
           echo "✅ Image test completed"
 
-  trivy-scan:
-    name: Trivy Security Scan
-    runs-on: ubuntu-latest
-    needs: [find-dockerfiles, build-test]
-    if: inputs.enable-trivy && needs.find-dockerfiles.outputs.dockerfiles != '[]'
-    strategy:
-      matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
-      fail-fast: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract service and binary name
-        id: extract
-        run: |
-          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          BINARY=${DOCKERFILE_NAME#Dockerfile.}
-
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-
-      - name: Build Docker image for scanning
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ inputs.build-context }}
-          file: ${{ matrix.dockerfile }}
-          push: false
-          load: true
-          tags: scan/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:scan
-          cache-from: type=gha
-
       - name: Run Trivy vulnerability scanner
+        if: inputs.enable-trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: scan/${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}:scan
-          format: 'sarif'
-          output: 'trivy-${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}.sarif'
+          image-ref: test:latest
+          format: "sarif"
+          output: "trivy-results.sarif"
         continue-on-error: true
 
       - name: Upload Trivy results
+        if: inputs.enable-trivy
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-${{ steps.extract.outputs.service }}-${{ steps.extract.outputs.binary }}.sarif
+          sarif_file: trivy-results.sarif
         continue-on-error: true

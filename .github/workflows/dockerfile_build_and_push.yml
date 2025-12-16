@@ -3,61 +3,55 @@ name: Dockerfile Build and Push
 on:
   workflow_call:
     inputs:
-      dockerfile-path:
-        description: 'Path to Dockerfiles directory'
-        required: false
-        type: string
-        default: 'build'
-      dockerfile-pattern:
-        description: 'Dockerfile pattern (e.g., Dockerfile.*)'
-        required: false
-        type: string
-        default: 'Dockerfile.*'
-      build-context:
-        description: 'Docker build context path'
-        required: false
-        type: string
-        default: '.'
-      registry:
-        description: 'Docker registry (e.g., ghcr.io, docker.io)'
-        required: false
-        type: string
-        default: 'ghcr.io'
-      image-prefix:
-        description: 'Image name prefix (e.g., owner/repo)'
+      images:
+        description: "JSON array of image configurations [{name, dockerfile}]"
         required: true
         type: string
-      tag-strategy:
-        description: 'Tagging strategy: tag (use git tag), sha (use commit sha), branch (use branch name)'
+      base-path:
+        description: "Base path for Dockerfiles (prepended to dockerfile paths)"
         required: false
         type: string
-        default: 'tag'
-      additional-tags:
-        description: 'Additional tags (comma-separated)'
+        default: ""
+      build-context:
+        description: "Docker build context path"
         required: false
         type: string
-        default: ''
+        default: "."
+      registry:
+        description: "Docker registry (e.g., ghcr.io, docker.io)"
+        required: false
+        type: string
+        default: "ghcr.io"
+      tag:
+        description: "Docker image tag (e.g., v1.0.0, latest)"
+        required: true
+        type: string
+      tag-prefix:
+        description: "Tag prefix to remove (e.g., v for v1.0.0)"
+        required: false
+        type: string
+        default: ""
       platforms:
-        description: 'Target platforms (comma-separated)'
+        description: "Target platforms (comma-separated)"
         required: false
         type: string
-        default: 'linux/amd64,linux/arm64'
+        default: "linux/amd64,linux/arm64"
       enable-provenance:
-        description: 'Enable build provenance attestation'
+        description: "Enable build provenance attestation"
         required: false
         type: boolean
         default: true
       enable-sbom:
-        description: 'Enable SBOM attestation'
+        description: "Enable SBOM attestation"
         required: false
         type: boolean
         default: true
     secrets:
       registry-username:
-        description: 'Registry username'
+        description: "Registry username"
         required: true
       registry-password:
-        description: 'Registry password/token'
+        description: "Registry password/token"
         required: true
 
 permissions:
@@ -68,32 +62,13 @@ permissions:
   attestations: write
 
 jobs:
-  find-dockerfiles:
-    name: Find Dockerfiles
-    runs-on: ubuntu-latest
-    outputs:
-      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Find Dockerfiles
-        id: find
-        run: |
-          # Find all Dockerfiles matching pattern, excluding Dockerfile.migration
-          DOCKERFILES=$(find ${{ inputs.dockerfile-path }} -type f -name '${{ inputs.dockerfile-pattern }}' | grep -v 'Dockerfile\.migration$' | jq -R -s -c 'split("\n")[:-1]')
-          echo "dockerfiles=$DOCKERFILES" >> $GITHUB_OUTPUT
-          echo "Found Dockerfiles (excluding migration):"
-          echo "$DOCKERFILES" | jq -r '.[]'
-
   build-and-push:
     name: Build and Push
     runs-on: ubuntu-latest
-    needs: find-dockerfiles
-    if: needs.find-dockerfiles.outputs.dockerfiles != '[]'
+    if: fromJson(inputs.images) != null && fromJson(inputs.images)[0] != null
     strategy:
       matrix:
-        dockerfile: ${{ fromJson(needs.find-dockerfiles.outputs.dockerfiles) }}
+        image: ${{ fromJson(inputs.images) }}
       fail-fast: false
     steps:
       - name: Checkout code
@@ -105,58 +80,46 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract service and binary name
-        id: extract
+      - name: Resolve paths
+        id: paths
         run: |
-          DOCKERFILE_NAME=$(basename ${{ matrix.dockerfile }})
-          SERVICE=$(basename $(dirname ${{ matrix.dockerfile }}))
-          BINARY=${DOCKERFILE_NAME#Dockerfile.}
-
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
-          echo "binary=$BINARY" >> $GITHUB_OUTPUT
-          echo "image-name=${{ inputs.image-prefix }}/$SERVICE-$BINARY" >> $GITHUB_OUTPUT
+          DOCKERFILE="${{ matrix.image.dockerfile }}"
+          if [ -n "${{ inputs.base-path }}" ]; then
+            DOCKERFILE="${{ inputs.base-path }}/${DOCKERFILE}"
+          fi
+          echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
+          echo "Dockerfile path: $DOCKERFILE"
 
       - name: Generate Docker tags
         id: meta
         run: |
-          IMAGE_NAME="${{ steps.extract.outputs.image-name }}"
-          TAGS=""
+          IMAGE_NAME="${{ matrix.image.name }}"
+          TAG="${{ inputs.tag }}"
+          PREFIX="${{ inputs.tag-prefix }}"
 
-          # Main tag based on strategy
-          case "${{ inputs.tag-strategy }}" in
-            tag)
-              if [ "${{ github.ref_type }}" = "tag" ]; then
-                TAG="${{ github.ref_name }}"
-                TAGS="${{ inputs.registry }}/${IMAGE_NAME}:${TAG}"
-              else
-                echo "Error: tag strategy requires a git tag"
-                exit 1
-              fi
-              ;;
-            sha)
-              SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-              TAGS="${{ inputs.registry }}/${IMAGE_NAME}:${SHORT_SHA}"
-              ;;
-            branch)
-              BRANCH=$(echo ${{ github.ref_name }} | sed 's/[^a-zA-Z0-9._-]/-/g')
-              TAGS="${{ inputs.registry }}/${IMAGE_NAME}:${BRANCH}"
-              ;;
-          esac
-
-          # Add additional tags
-          if [ -n "${{ inputs.additional-tags }}" ]; then
-            IFS=',' read -ra EXTRA_TAGS <<< "${{ inputs.additional-tags }}"
-            for tag in "${EXTRA_TAGS[@]}"; do
-              TAGS="${TAGS},${{ inputs.registry }}/${IMAGE_NAME}:${tag}"
-            done
+          # Check if tag has expected prefix
+          if [ -n "$PREFIX" ] && [[ ! "$TAG" == "$PREFIX"* ]]; then
+            echo "Tag '$TAG' does not have expected prefix '$PREFIX'. Skipping build."
+            echo "should-build=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # Add latest tag if this is a version tag
-          if [ "${{ inputs.tag-strategy }}" = "tag" ] && [[ "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          # Remove prefix if present
+          if [ -n "$PREFIX" ]; then
+            CLEAN_TAG="${TAG#"$PREFIX"}"
+          else
+            CLEAN_TAG="$TAG"
+          fi
+
+          TAGS="${{ inputs.registry }}/${IMAGE_NAME}:${CLEAN_TAG}"
+
+          # Add additional tags for 'latest' if tag is v*.*.* format
+          if [[ "$CLEAN_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             TAGS="${TAGS},${{ inputs.registry }}/${IMAGE_NAME}:latest"
           fi
 
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "should-build=true" >> "$GITHUB_OUTPUT"
           echo "Generated tags: ${TAGS}"
 
       - name: Login to Registry
@@ -168,10 +131,11 @@ jobs:
 
       - name: Build and push Docker image
         id: build-push
+        if: steps.meta.outputs.should-build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build-context }}
-          file: ${{ matrix.dockerfile }}
+          file: ${{ steps.paths.outputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -181,21 +145,9 @@ jobs:
           sbom: ${{ inputs.enable-sbom }}
 
       - name: Generate artifact attestation
-        if: inputs.enable-provenance
+        if: inputs.enable-provenance && steps.meta.outputs.should-build == 'true'
         uses: actions/attest-build-provenance@v3
         with:
-          subject-name: ${{ inputs.registry }}/${{ steps.extract.outputs.image-name }}
+          subject-name: ${{ inputs.registry }}/${{ matrix.image.name }}
           subject-digest: ${{ steps.build-push.outputs.digest }}
           push-to-registry: true
-
-      - name: Summary
-        run: |
-          echo "### 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Service:** ${{ steps.extract.outputs.service }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Binary:** ${{ steps.extract.outputs.binary }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ steps.build-push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
