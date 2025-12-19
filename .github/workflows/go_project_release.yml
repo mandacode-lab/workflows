@@ -107,6 +107,7 @@ jobs:
 
   build-and-push:
     name: Build and Push Docker Image
+    if: startsWith(github.ref_name, inputs.tag-prefix)
     uses: ./.github/workflows/dockerfile_build_and_push.yml
     with:
       images: ${{ inputs.images }}
