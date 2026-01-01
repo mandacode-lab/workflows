@@ -76,9 +76,7 @@ jobs:
 
       - name: Build
         run: |
-          echo "Building Go project..."
           go build ${{ inputs.build-path }}
-          echo "✅ Build completed successfully"
 
   test:
     name: Test
@@ -100,7 +98,6 @@ jobs:
 
       - name: Run tests
         run: |
-          echo "Running tests..."
           if [ "${{ inputs.enable-coverage }}" = "true" ]; then
             go test ${{ inputs.test-flags }} -coverprofile=coverage.out -covermode=atomic ${{ inputs.test-path }}
           else
@@ -186,5 +183,4 @@ jobs:
 
       - name: Run govulncheck
         run: |
-          echo "🔍 Scanning for vulnerabilities..."
           govulncheck ./...

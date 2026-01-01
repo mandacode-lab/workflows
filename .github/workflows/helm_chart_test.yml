@@ -67,25 +67,22 @@ jobs:
           echo "chart-type=$CHART_TYPE" >> "$GITHUB_OUTPUT"
           echo "Chart type: $CHART_TYPE"
 
-      - name: Build dependencies (including subcharts)
+      - name: Build dependencies
         run: |
           cd "${{ steps.paths.outputs.chart-dir }}"
           if [ -f "Chart.yaml" ] && yq eval '.dependencies' Chart.yaml > /dev/null 2>&1; then
-            echo "Building chart dependencies (including subcharts recursively)..."
             helm dependency build
           else
-            echo "No dependencies found, skipping dependency build"
+            echo "No dependencies found"
           fi
 
       - name: Helm lint
         run: |
-          echo "Linting Helm chart..."
           helm lint ${{ steps.paths.outputs.chart-dir }}
 
       - name: Helm template
         if: steps.detect.outputs.chart-type != 'library'
         run: |
-          echo "Templating Helm chart..."
           helm template test ${{ steps.paths.outputs.chart-dir }} --debug
 
   kubeconform:
@@ -127,20 +124,18 @@ jobs:
           echo "chart-type=$CHART_TYPE" >> "$GITHUB_OUTPUT"
           echo "Chart type: $CHART_TYPE"
 
-      - name: Build dependencies (including subcharts)
+      - name: Build dependencies
         run: |
           cd "${{ steps.paths.outputs.chart-dir }}"
           if [ -f "Chart.yaml" ] && yq eval '.dependencies' Chart.yaml > /dev/null 2>&1; then
-            echo "Building chart dependencies (including subcharts recursively)..."
             helm dependency build
           else
-            echo "No dependencies found, skipping dependency build"
+            echo "No dependencies found"
           fi
 
       - name: Validate with kubeconform
         if: steps.detect.outputs.chart-type != 'library'
         run: |
-          echo "Validating with kubeconform..."
           K8S_VERSION="${{ inputs.kubernetes-version }}"
           K8S_VERSION="${K8S_VERSION#v}"
           helm template test ${{ steps.paths.outputs.chart-dir }} | kubeconform \
@@ -208,7 +203,6 @@ jobs:
       - name: Install chart
         if: steps.detect.outputs.chart-type != 'library'
         run: |
-          echo "Installing Helm chart in Kind cluster..."
           helm install test-release ${{ steps.paths.outputs.chart-dir }} \
             --wait --timeout 5m --debug \
             --dry-run

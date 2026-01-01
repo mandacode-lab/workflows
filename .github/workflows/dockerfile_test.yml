@@ -105,9 +105,7 @@ jobs:
       - name: Test image
         if: ${{ !inputs.test-build-only && !contains(inputs.platforms, ',') }}
         run: |
-          echo "Testing Docker image..."
           docker run --rm test:latest --version || true
-          echo "✅ Image test completed"
 
       - name: Run Trivy vulnerability scanner
         if: inputs.enable-trivy && !contains(inputs.platforms, ',')
