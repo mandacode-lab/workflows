@@ -4,44 +4,48 @@ on:
   workflow_call:
     inputs:
       charts:
-        description: 'JSON array of chart configurations [{dir}]'
+        description: "JSON array of chart configurations [{dir}]"
         required: true
         type: string
       base-path:
-        description: 'Base path for Helm charts (prepended to chart dirs)'
+        description: "Base path for Helm charts (prepended to chart dirs)"
         required: false
         type: string
-        default: ''
+        default: ""
       registry:
-        description: 'OCI registry for Helm charts (e.g., ghcr.io, registry-1.docker.io)'
+        description: "OCI registry for Helm charts (e.g., ghcr.io, registry-1.docker.io)"
         required: false
         type: string
-        default: 'ghcr.io'
+        default: "ghcr.io"
+      repository:
+        description: "Repository path in registry (e.g., owner/repo-name)"
+        required: true
+        type: string
       helm-version:
-        description: 'Helm version to use'
+        description: "Helm version to use"
         required: false
         type: string
-        default: 'v3.16.3'
+        default: "v3.19.2"
       enable-signing:
-        description: 'Enable chart signing with GPG'
+        description: "Enable chart signing with GPG"
         required: false
         type: boolean
         default: false
     secrets:
       registry-username:
-        description: 'Registry username'
+        description: "Registry username"
         required: true
       registry-password:
-        description: 'Registry password/token'
+        description: "Registry password/token"
         required: true
       gpg-private-key:
-        description: 'GPG private key for signing (base64 encoded)'
+        description: "GPG private key for signing (base64 encoded)"
         required: false
       gpg-key-name:
-        description: 'GPG key name for signing'
+        description: "GPG key name for signing"
         required: false
       gpg-passphrase:
-        description: 'GPG key passphrase'
+        description: "GPG key passphrase"
         required: false
 
 permissions:
@@ -78,6 +82,12 @@ jobs:
           fi
           echo "chart-dir=$CHART_DIR" >> "$GITHUB_OUTPUT"
           echo "Chart directory: $CHART_DIR"
+
+      - name: Login to OCI registry
+        run: |
+          echo "${{ secrets.registry-password }}" | helm registry login ${{ inputs.registry }} \
+            --username ${{ secrets.registry-username }} \
+            --password-stdin
 
       - name: Extract chart info
         id: extract
@@ -121,18 +131,17 @@ jobs:
 
           ls -la .helm-packages/
 
-      - name: Login to OCI registry
-        run: |
-          echo "${{ secrets.registry-password }}" | helm registry login ${{ inputs.registry }} \
-            --username ${{ secrets.registry-username }} \
-            --password-stdin
-
       - name: Push chart to OCI registry
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          REPOSITORY: ${{ inputs.repository }}
+          CHART_NAME: ${{ steps.extract.outputs.chart-name }}
+          CHART_VERSION: ${{ steps.extract.outputs.chart-version }}
         run: |
-          CHART_PACKAGE=$(ls .helm-packages/${{ steps.extract.outputs.chart-name }}-${{ steps.extract.outputs.chart-version }}.tgz)
-          helm push "$CHART_PACKAGE" oci://${{ inputs.registry }}
+          CHART_PACKAGE=$(ls .helm-packages/${CHART_NAME}-${CHART_VERSION}.tgz)
+          helm push "$CHART_PACKAGE" oci://${REGISTRY}/${REPOSITORY}
 
-          echo "✅ Chart pushed successfully"
+          echo "✅ Chart pushed successfully to ${REGISTRY}/${REPOSITORY}"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
