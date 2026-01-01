@@ -115,14 +115,13 @@ jobs:
             echo "chart-type=$CHART_TYPE"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Prepare chart
+      - name: Display chart info
         run: |
-          echo "Chart type: ${{ steps.extract.outputs.chart-type }}"
-          echo "Chart version: ${{ steps.extract.outputs.chart-version }}"
+          echo "Type: ${{ steps.extract.outputs.chart-type }}"
+          echo "Version: ${{ steps.extract.outputs.chart-version }}"
           if [ "${{ steps.extract.outputs.chart-type }}" != "library" ]; then
-            echo "Chart appVersion: ${{ steps.extract.outputs.app-version }}"
+            echo "App Version: ${{ steps.extract.outputs.app-version }}"
           fi
-          echo "Packaging chart with existing versions..."
 
       - name: Setup GPG
         if: inputs.enable-signing
