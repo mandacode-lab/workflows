@@ -99,6 +99,12 @@ on:
       registry-password:
         description: "Registry password/token"
         required: true
+      helm-registry-username:
+        description: "Helm registry username"
+        required: false
+      helm-registry-password:
+        description: "Helm registry password/token"
+        required: false
       gpg-private-key:
         description: "GPG private key for signing (base64 encoded)"
         required: false
@@ -204,8 +210,8 @@ jobs:
       enable-signing: ${{ inputs.enable-chart-signing }}
       enable-provenance: ${{ inputs.enable-provenance }}
     secrets:
-      registry-username: ${{ secrets.registry-username }}
-      registry-password: ${{ secrets.registry-password }}
+      registry-username: ${{ secrets.helm-registry-username != '' && secrets.helm-registry-username || secrets.registry-username }}
+      registry-password: ${{ secrets.helm-registry-password != '' && secrets.helm-registry-password || secrets.registry-password }}
       gpg-private-key: ${{ secrets.gpg-private-key }}
       gpg-key-name: ${{ secrets.gpg-key-name }}
       gpg-passphrase: ${{ secrets.gpg-passphrase }}
