@@ -67,14 +67,14 @@ jobs:
           echo "chart-type=$CHART_TYPE" >> "$GITHUB_OUTPUT"
           echo "Chart type: $CHART_TYPE"
 
-      - name: Update dependencies
+      - name: Build dependencies (including subcharts)
         run: |
           cd "${{ steps.paths.outputs.chart-dir }}"
           if [ -f "Chart.yaml" ] && yq eval '.dependencies' Chart.yaml > /dev/null 2>&1; then
-            echo "Updating chart dependencies..."
-            helm dependency update
+            echo "Building chart dependencies (including subcharts recursively)..."
+            helm dependency build
           else
-            echo "No dependencies found, skipping dependency update"
+            echo "No dependencies found, skipping dependency build"
           fi
 
       - name: Helm lint
@@ -127,14 +127,14 @@ jobs:
           echo "chart-type=$CHART_TYPE" >> "$GITHUB_OUTPUT"
           echo "Chart type: $CHART_TYPE"
 
-      - name: Update dependencies
+      - name: Build dependencies (including subcharts)
         run: |
           cd "${{ steps.paths.outputs.chart-dir }}"
           if [ -f "Chart.yaml" ] && yq eval '.dependencies' Chart.yaml > /dev/null 2>&1; then
-            echo "Updating chart dependencies..."
-            helm dependency update
+            echo "Building chart dependencies (including subcharts recursively)..."
+            helm dependency build
           else
-            echo "No dependencies found, skipping dependency update"
+            echo "No dependencies found, skipping dependency build"
           fi
 
       - name: Validate with kubeconform
