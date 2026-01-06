@@ -47,7 +47,7 @@ on:
         description: "Hadolint version"
         required: false
         type: string
-        default: "v3.0.0"
+        default: "v2.14.0"
       enable-trivy:
         description: "Enable Trivy security scan"
         required: false
@@ -96,7 +96,7 @@ jobs:
 
       - name: Run Hadolint
         if: inputs.enable-hadolint
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.3.0
         with:
           dockerfile: ${{ steps.paths.outputs.dockerfile }}
           failure-threshold: warning

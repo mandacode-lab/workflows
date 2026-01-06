@@ -16,10 +16,10 @@ on:
   workflow_call:
     inputs:
       go-version:
-        description: "Go version to use (e.g., 1.23, 1.22.5)"
+        description: "Go version to use"
         required: false
         type: string
-        default: "1.23"
+        default: "1.25.5"
       go-version-file:
         description: "Path to go.mod or go.work file for Go version (takes precedence over go-version)"
         required: false
@@ -59,7 +59,7 @@ on:
         description: "golangci-lint version"
         required: false
         type: string
-        default: "v2.2.0"
+        default: "v2.7.2"
       lint-args:
         description: "golangci-lint arguments"
         required: false
@@ -74,7 +74,7 @@ on:
         description: "gosec version"
         required: false
         type: string
-        default: "2.21.4"
+        default: "2.22.11"
 
 permissions:
   contents: read
