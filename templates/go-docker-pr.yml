@@ -1,0 +1,43 @@
+# Template: Go Project with Docker - Pull Request
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/pr.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Update image configurations in the docker-test job
+#   4. Adjust parameters as needed
+
+name: Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  go-ci:
+    name: Go CI
+    uses: mandacode-lab/workflows/.github/workflows/go-ci.yml@main
+    with:
+      go-version: "1.23"
+      enable-coverage: true
+      coverage-threshold: 80
+      enable-security-scan: true
+
+  docker-test:
+    name: Docker Test
+    needs: go-ci
+    uses: mandacode-lab/workflows/.github/workflows/docker-test.yml@main
+    with:
+      images: |
+        [
+          {"dockerfile": "Dockerfile"}
+        ]
+      enable-hadolint: true
+      enable-trivy: true
+      trivy-severity: "HIGH,CRITICAL"

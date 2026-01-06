@@ -1,0 +1,47 @@
+# Template: Multi-Image Docker Build
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/release.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Add/remove images as needed
+#   4. Useful for microservices or projects with multiple containers
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  docker-build:
+    name: Build Multiple Images
+    uses: mandacode-lab/workflows/.github/workflows/docker-build.yml@main
+    with:
+      images: |
+        [
+          {"name": "api", "dockerfile": "services/api/Dockerfile"},
+          {"name": "worker", "dockerfile": "services/worker/Dockerfile"},
+          {"name": "scheduler", "dockerfile": "services/scheduler/Dockerfile"},
+          {"name": "migration", "dockerfile": "docker/migration/Dockerfile"}
+        ]
+      base-path: ""
+      build-context: "."
+      registry: ghcr.io
+      repository: ${{ github.repository }}
+      tag: ${{ github.ref_name }}
+      tag-prefix: "v"
+      platforms: "linux/amd64,linux/arm64"
+      build-args: |
+        VERSION=${{ github.ref_name }}
+        BUILD_DATE=${{ github.event.head_commit.timestamp }}
+        GIT_COMMIT=${{ github.sha }}
+    secrets:
+      registry-username: ${{ github.actor }}
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

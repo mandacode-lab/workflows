@@ -1,0 +1,55 @@
+# Template: Full Stack Go Project (Go + Docker + Helm) - Pull Request
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/pr.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Update image and chart configurations
+#   4. Adjust parameters as needed
+
+name: Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  go-ci:
+    name: Go CI
+    uses: mandacode-lab/workflows/.github/workflows/go-ci.yml@main
+    with:
+      go-version: "1.23"
+      enable-coverage: true
+      coverage-threshold: 80
+      enable-security-scan: true
+
+  docker-test:
+    name: Docker Test
+    needs: go-ci
+    uses: mandacode-lab/workflows/.github/workflows/docker-test.yml@main
+    with:
+      images: |
+        [
+          {"dockerfile": "Dockerfile"}
+        ]
+      enable-hadolint: true
+      enable-trivy: true
+
+  helm-test:
+    name: Helm Test
+    uses: mandacode-lab/workflows/.github/workflows/helm-test.yml@main
+    with:
+      charts: |
+        [
+          {"dir": "charts/myapp"}
+        ]
+      helm-version: "v3.16.3"
+      kubernetes-version: "v1.31.0"
+      enable-kubeconform: true
+      enable-install-test: true

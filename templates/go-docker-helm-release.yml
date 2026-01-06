@@ -1,0 +1,60 @@
+# Template: Full Stack Release (Go + Docker + Helm)
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/release.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Update image and chart configurations
+#   4. Adjust registry and repository settings
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  docker-build:
+    name: Build and Push Docker Images
+    uses: mandacode-lab/workflows/.github/workflows/docker-build.yml@main
+    with:
+      images: |
+        [
+          {"name": "api", "dockerfile": "Dockerfile"},
+          {"name": "worker", "dockerfile": "docker/worker/Dockerfile"}
+        ]
+      registry: ghcr.io
+      repository: ${{ github.repository }}
+      tag: ${{ github.ref_name }}
+      tag-prefix: "v"
+      platforms: "linux/amd64,linux/arm64"
+      enable-provenance: true
+      enable-sbom: true
+    secrets:
+      registry-username: ${{ github.actor }}
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  helm-package:
+    name: Package and Push Helm Charts
+    needs: docker-build
+    uses: mandacode-lab/workflows/.github/workflows/helm-package.yml@main
+    with:
+      charts: |
+        [
+          {"dir": "charts/api"},
+          {"dir": "charts/worker"}
+        ]
+      registry: ghcr.io
+      repository: ${{ github.repository }}
+      helm-version: "v3.16.3"
+      enable-provenance: true
+      skip-existing: true
+    secrets:
+      registry-username: ${{ github.actor }}
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,42 @@
+# Template: Go + Docker Release to AWS ECR
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/release.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Update AWS region and ECR repository prefix
+#   4. Configure AWS OIDC or add AWS credentials as secrets
+#   5. Update image configurations
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  docker-build-ecr:
+    name: Build and Push to AWS ECR
+    uses: mandacode-lab/workflows/.github/workflows/docker-build-ecr.yml@main
+    with:
+      images: |
+        [
+          {"name": "myapp", "dockerfile": "Dockerfile"}
+        ]
+      aws-region: ap-northeast-2
+      ecr-repository-prefix: mycompany
+      tag: ${{ github.ref_name }}
+      tag-prefix: "v"
+      platforms: "linux/amd64,linux/arm64"
+      create-repository: true
+    secrets:
+      # Option 1: OIDC (Recommended)
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      # Option 2: Access Keys (comment out if using OIDC)
+      # aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      # aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

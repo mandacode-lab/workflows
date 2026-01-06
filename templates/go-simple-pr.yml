@@ -1,0 +1,29 @@
+# Template: Simple Go Project - Pull Request
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/pr.yml
+#   2. Replace 'mandacode-lab/workflows' with your organization's workflow repository
+#   3. Adjust go-version and other parameters as needed
+
+name: Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  go-ci:
+    name: Go CI
+    uses: mandacode-lab/workflows/.github/workflows/go-ci.yml@main
+    with:
+      go-version: "1.23"
+      enable-coverage: true
+      coverage-threshold: 80
+      enable-security-scan: true
