@@ -29,7 +29,7 @@ jobs:
   go-ci:
     uses: mandacode-lab/workflows/.github/workflows/go-ci.yml@main
     with:
-      go-version: "1.23"
+      go-version: "1.25.5"
       coverage-threshold: 80
 ```
 
