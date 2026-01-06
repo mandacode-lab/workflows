@@ -1,0 +1,60 @@
+# Template: Migration Image - Release (AWS ECR)
+#
+# Release workflow for migration Docker images to AWS ECR
+# Triggered by migration-specific tags or manual dispatch
+#
+# Usage:
+#   1. Copy this file to your project's .github/workflows/migration-release.yml
+#   2. Configure AWS OIDC or add AWS credentials as secrets
+#   3. Update AWS region and repository configurations
+#   4. Update paths and dockerfile location
+#   5. Create releases with tags like: migration-v1.0.0
+
+name: Migration Image Release
+
+on:
+  push:
+    tags:
+      - 'migration-v*'
+    paths:
+      - 'migrations/**'
+      - 'docker/migration/**'
+      - 'db/migrations/**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to use for the image (e.g., v1.0.0, latest)'
+        required: true
+        default: 'latest'
+      push:
+        description: 'Push to registry'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  docker-build-ecr:
+    name: Build and Push Migration Image to ECR
+    uses: mandacode-lab/workflows/.github/workflows/docker-build-ecr.yml@main
+    with:
+      images: |
+        [
+          {"name": "migration", "dockerfile": "docker/migration/Dockerfile", "context": "."}
+        ]
+      aws-region: ap-northeast-2
+      ecr-repository-prefix: mycompany
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
+      tag-prefix: "migration-v"
+      platforms: "linux/amd64,linux/arm64"
+      create-repository: true
+    secrets:
+      # Option 1: OIDC (Recommended)
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      # Option 2: Access Keys (comment out if using OIDC)
+      # aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      # aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
