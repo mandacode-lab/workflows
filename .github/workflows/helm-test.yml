@@ -32,7 +32,7 @@ on:
         description: "Kubernetes version for validation and testing"
         required: false
         type: string
-        default: "v1.31.0"
+        default: "v1.34.0"
       enable-kubeconform:
         description: "Enable kubeconform validation (skipped for library charts)"
         required: false
@@ -42,7 +42,7 @@ on:
         description: "kubeconform version"
         required: false
         type: string
-        default: "0.24.0"
+        default: "0.7.0"
       enable-install-test:
         description: "Enable Helm install test with Kind (skipped for library charts)"
         required: false
